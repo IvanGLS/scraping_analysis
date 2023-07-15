@@ -1,4 +1,5 @@
 import csv
+import json
 import re
 import time
 import scrapy
@@ -17,11 +18,13 @@ class DjinniJobsSpider(scrapy.Spider):
         'FEED_EXPORT_ENCODING': 'utf-8',
     }
 
+    def __init__(self, keyword='Python', **kwargs):
+        super().__init__(**kwargs)
+        self.keyword = keyword
+
     def start_requests(self):
-        yield scrapy.Request(
-            url="https://djinni.co/jobs/?primary_keyword=Python",
-            callback=self.parse_job_list,
-        )
+        url = f"https://djinni.co/jobs/?primary_keyword={self.keyword}"
+        yield scrapy.Request(url=url, callback=self.parse_job_list)
 
     def parse_job_list(self, response):
         job_links = response.css('div.list-jobs__title a.profile::attr(href)').getall()
@@ -59,14 +62,23 @@ class DjinniJobsSpider(scrapy.Spider):
         views = int(re.search(r'(\d+)', views).group(1)) if views else None
 
         salary = response.xpath('//h1/span[@class="public-salary-item"]/text()').get()
-        salary = salary.strip() if salary else None
+        if salary:
+            salary_range = re.findall(r'\d+', salary)
+            if salary_range:
+                salary_values = [int(value) for value in salary_range]
+                min_salary = min(salary_values)
+                max_salary = max(salary_values)
+            else:
+                min_salary = max_salary = None
+        else:
+            min_salary = max_salary = None
 
         yield {
             'Job title': job_title,
             'Experience': experience,
             'Technologies': ', '.join(technologies) if technologies else [],
             'Views': views,
-            'Salary': salary
+            'Salary': {'Min': min_salary, 'Max': max_salary}
         }
 
     def closed(self, reason):
@@ -77,6 +89,13 @@ class DjinniJobsSpider(scrapy.Spider):
         with open('djinni.csv', 'r', newline='') as f:
             reader = csv.DictReader(f)
             rows = list(reader)
+
+        # Convert the 'Salary' values to JSON strings
+        for row in rows:
+            salary = row['Salary']
+            if salary and salary != 'None':
+                salary_dict = ast.literal_eval(salary)
+                row['Salary'] = json.dumps(salary_dict)
 
         # Create headers manually
         headers = ['Job title', 'Experience', 'Technologies', 'Views', 'Salary']
